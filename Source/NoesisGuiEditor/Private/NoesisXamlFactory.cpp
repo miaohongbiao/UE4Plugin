@@ -65,6 +65,7 @@ TArray<FString> ScanKeyword(FString Text, FString Keyword)
 struct FXamlDescriptor
 {
 	FString Path;
+	UNoesisXaml* Xaml;
 };
 
 TArray<FXamlDescriptor> ParseForXamls(FString XamlText)
@@ -81,14 +82,12 @@ TArray<FXamlDescriptor> ParseForXamls(FString XamlText)
 	return XamlDescriptors;
 }
 
-TArray<UNoesisXaml*> ImportXamls(FString BasePackageName, FString Path, TArray<FXamlDescriptor> XamlDescriptors)
+void ImportXamls(FString BasePackageName, FString Path, TArray<FXamlDescriptor>& XamlDescriptors)
 {
-	TArray<UNoesisXaml*> Xamls;
-
 	auto XamlFact = NewObject<UNoesisXamlFactory>();
 	XamlFact->AddToRoot();
 
-	for (auto XamlDescriptor : XamlDescriptors)
+	for (auto& XamlDescriptor : XamlDescriptors)
 	{
 		FString XamlPath = FPaths::GetPath(XamlDescriptor.Path);
 		FString XamlName = ObjectTools::SanitizeObjectName(FPaths::GetBaseFilename(XamlDescriptor.Path));
@@ -126,17 +125,16 @@ TArray<UNoesisXaml*> ImportXamls(FString BasePackageName, FString Path, TArray<F
 			XamlPackage->SetDirtyFlag(true);
 		}
 
-		Xamls.Add(Xaml);
+		XamlDescriptor.Xaml = Xaml;
 	}
 
 	XamlFact->RemoveFromRoot();
-
-	return Xamls;
 }
 
 struct FFontDescriptor
 {
 	FString Family;
+	UFont* Font;
 };
 
 TArray<FFontDescriptor> ParseForFonts(FString XamlText)
@@ -161,15 +159,15 @@ unsigned long StreamRead(FT_Stream Stream, unsigned long Offset, unsigned char* 
 
 void StreamClose(FT_Stream) {}
 
-TArray<UFont*> ImportFonts(FString BasePackageName, FString Path, TArray<FFontDescriptor> FontDescriptors)
+void ImportFonts(FString BasePackageName, FString Path, TArray<FFontDescriptor>& FontDescriptors)
 {
-	TArray<UFont*> Fonts;
-
 	TSet<FString> UniqueFontFamilies;
 	for (auto FontDescriptor : FontDescriptors)
 	{
 		UniqueFontFamilies.Add(FontDescriptor.Family);
 	}
+
+	FontDescriptors.Empty();
 
 	for (auto Family : UniqueFontFamilies)
 	{
@@ -185,11 +183,11 @@ TArray<UFont*> ImportFonts(FString BasePackageName, FString Path, TArray<FFontDe
 			FString Path;
 			FString BaseUri;
 			FString FamilyName;
-			TArray<UFont*> Fonts;
+			UFont* Font;
 			FT_Library FTLibrary;
 
 			ScanFolderForFonts(FString InBasePackageName, FString InPath, FString InBaseUri, FString InFamilyName)
-				: BasePackageName(InBasePackageName), Path(InPath), BaseUri(InBaseUri), FamilyName(InFamilyName)
+				: BasePackageName(InBasePackageName), Path(InPath), BaseUri(InBaseUri), FamilyName(InFamilyName), Font(nullptr)
 			{
 				int32 Error = FT_Init_FreeType(&FTLibrary);
 				checkf(Error == 0, TEXT("Could not init Freetype"));
@@ -274,20 +272,20 @@ TArray<UFont*> ImportFonts(FString BasePackageName, FString Path, TArray<FFontDe
 							FontFactory->AddToRoot();
 
 							bool Cancelled = false;
-							UFont* Font = (UFont*)FontFactory->ImportObject(UFont::StaticClass(), FontPackage, *FontName, RF_Standalone | RF_Public, FilenameOrDirectory, TEXT(""), Cancelled);
+							Font = (UFont*)FontFactory->ImportObject(UFont::StaticClass(), FontPackage, *FontName, RF_Standalone | RF_Public, FilenameOrDirectory, TEXT(""), Cancelled);
 
-							if (Font != NULL)
+							if (Font)
 							{
 								// Notify the asset registry
 								FAssetRegistryModule::AssetCreated(Font);
-
+ 
 								// Set the dirty flag so this package will get saved later
 								FontPackage->SetDirtyFlag(true);
 							}
 
 							FontFactory->RemoveFromRoot();
 
-							Fonts.Add(Font);
+							return false;
 						}
 					}
 				}
@@ -299,15 +297,19 @@ TArray<UFont*> ImportFonts(FString BasePackageName, FString Path, TArray<FFontDe
 		ScanFolderForFonts Visitor(BasePackageName, Path, BaseUri, FamilyName);
 		PlatformFile.IterateDirectory(*(Path / BaseUri), Visitor);
 
-		Fonts += Visitor.Fonts;
+		if (Visitor.Font)
+		{
+			FFontDescriptor& FontDescriptor = *new(FontDescriptors)FFontDescriptor;
+			FontDescriptor.Family = Family;
+			FontDescriptor.Font = Visitor.Font;
+		}
 	}
-
-	return Fonts;
 }
 
 struct FImageDescriptor
 {
 	FString Path;
+	UTexture2D* Texture;
 };
 
 TArray<FImageDescriptor> ParseForImages(FString XamlText)
@@ -329,10 +331,8 @@ TArray<FImageDescriptor> ParseForImages(FString XamlText)
 	return ImageDescriptors;
 }
 
-TArray<UTexture2D*> ImportImages(FString BasePackageName, FString Path, TArray<FImageDescriptor> ImageDescriptors)
+void ImportImages(FString BasePackageName, FString Path, TArray<FImageDescriptor>& ImageDescriptors)
 {
-	TArray<UTexture2D*> Textures;
-
 	auto TextureFact = NewObject<UTextureFactory>();
 	TextureFact->AddToRoot();
 
@@ -341,6 +341,8 @@ TArray<UTexture2D*> ImportImages(FString BasePackageName, FString Path, TArray<F
 	{
 		UniqueImagePaths.Add(ImageDescriptor.Path);
 	}
+
+	ImageDescriptors.Empty();
 
 	for (auto ImagePath : UniqueImagePaths)
 	{
@@ -382,12 +384,12 @@ TArray<UTexture2D*> ImportImages(FString BasePackageName, FString Path, TArray<F
 			TexturePackage->SetDirtyFlag(true);
 		}
 
-		Textures.Add(Texture);
+		FImageDescriptor& ImageDescriptor = *new(ImageDescriptors)FImageDescriptor;
+		ImageDescriptor.Path = ImagePath;
+		ImageDescriptor.Texture = Texture;
 	}
 
 	TextureFact->RemoveFromRoot();
-
-	return Textures;
 }
 
 UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent, FName Name, EObjectFlags Flags, UObject* Context, const TCHAR* Type, const uint8*& Buffer, const uint8* BufferEnd, FFeedbackContext* Warn)
@@ -412,48 +414,51 @@ UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 	}
 
 	TArray<FXamlDescriptor> XamlDescriptors = ParseForXamls(XamlText);
-	TArray<UNoesisXaml*> Xamls = ImportXamls(BasePackageName, FPaths::GetPath(Filename), XamlDescriptors);
+	ImportXamls(BasePackageName, FPaths::GetPath(Filename), XamlDescriptors);
 
 	TArray<FFontDescriptor> FontDescriptors = ParseForFonts(XamlText);
-	TArray<UFont*> Fonts = ImportFonts(BasePackageName, FPaths::GetPath(Filename), FontDescriptors);
+	ImportFonts(BasePackageName, FPaths::GetPath(Filename), FontDescriptors);
 
 	TArray<FImageDescriptor> ImageDescriptors = ParseForImages(XamlText);
-	TArray<UTexture2D*> Textures = ImportImages(BasePackageName, FPaths::GetPath(Filename), ImageDescriptors);
+	ImportImages(BasePackageName, FPaths::GetPath(Filename), ImageDescriptors);
 
 	UNoesisXaml* NoesisXaml = NewObject<UNoesisXaml>(Parent, Class, Name, Flags);
 
 	NoesisXaml->XamlText.Insert(Buffer, BufferEnd - Buffer, 0);
 	NoesisXaml->XamlMap.Add(NoesisXaml->GetName() + TEXT(".xaml"), NoesisXaml);
 
-	for (int32 XamlIndex = 0; XamlIndex != XamlDescriptors.Num(); ++XamlIndex)
+	for (auto XamlDescriptor : XamlDescriptors)
 	{
-		UNoesisXaml* ReferencedXaml = Xamls[XamlIndex];
-		NoesisXaml->XamlMap.Add(XamlDescriptors[XamlIndex].Path, ReferencedXaml);
+		FString RelativePath, XamlName;
+		XamlDescriptor.Path.Split(TEXT("/"), &RelativePath, &XamlName, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+
+		UNoesisXaml* ReferencedXaml = XamlDescriptor.Xaml;
+		NoesisXaml->XamlMap.Add(XamlDescriptor.Path, ReferencedXaml);
 
 		for (auto Xaml : ReferencedXaml->XamlMap)
 		{
-			NoesisXaml->XamlMap.Add(Xaml.Key, Xaml.Value);
+			NoesisXaml->XamlMap.Add(RelativePath.IsEmpty() ? Xaml.Key : RelativePath / Xaml.Key, Xaml.Value);
 		}
 
 		for (auto Font : ReferencedXaml->FontMap)
 		{
-			NoesisXaml->FontMap.Add(Font.Key, Font.Value);
+			NoesisXaml->FontMap.Add(RelativePath.IsEmpty() ? Font.Key : RelativePath / Font.Key, Font.Value);
 		}
 
 		for (auto Texture : ReferencedXaml->TextureMap)
 		{
-			NoesisXaml->TextureMap.Add(Texture.Key, Texture.Value);
+			NoesisXaml->TextureMap.Add(RelativePath.IsEmpty() ? Texture.Key : RelativePath / Texture.Key, Texture.Value);
 		}
 	}
 
-	for (auto Font : Fonts)
+	for (auto FontDescriptor : FontDescriptors)
 	{
-		NoesisXaml->FontMap.Add(Font->GetPathName(), Font);
+		NoesisXaml->FontMap.Add(FontDescriptor.Family, FontDescriptor.Font);
 	}
 
-	for (int32 ImageIndex = 0; ImageIndex != ImageDescriptors.Num(); ++ImageIndex)
+	for (auto ImageDescriptor : ImageDescriptors)
 	{
-		NoesisXaml->TextureMap.Add(ImageDescriptors[ImageIndex].Path, Textures[ImageIndex]);
+		NoesisXaml->TextureMap.Add(ImageDescriptor.Path, ImageDescriptor.Texture);
 	}
 
 	Noesis::Ptr<Noesis::Core::BaseComponent> Xaml = Noesis::GUI::LoadXaml<Noesis::Core::BaseComponent>(StringCast<NsChar>(*(FString::FromInt(NoesisXaml->GetUniqueID()) / NoesisXaml->GetName() + TEXT(".xaml"))).Get());
@@ -476,3 +481,5 @@ UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 
 	return NoesisXaml;
 }
+
+#undef LOCTEXT_NAMESPACE
